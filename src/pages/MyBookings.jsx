@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Navbar } from '../components/Navbar';
-import { bookingsAPI, getApiErrorMessage } from '../services/api';
+import { apiClient, bookingsAPI, getApiErrorMessage } from '../services/api';
 import { useStoreVersion } from '../hooks/useStoreVersion';
+import { useAuth } from '../context/AuthContext';
 import { APARTMENT_PLACEHOLDER } from '../utils/placeholders';
 
 const statusStyles = {
@@ -26,11 +27,16 @@ export const MyBookings = () => {
 
   useEffect(() => {
     const loadBookings = async () => {
-      if (!user?._id) return;
+      const userId = user?._id || user?.id;
+      if (!userId) {
+        setBookings([]);
+        setLoading(false);
+        return;
+      }
       setLoading(true);
 
       try {
-        const response = await bookingsAPI.getStudentBookings(user._id);
+        const response = await bookingsAPI.getStudentBookings(userId);
         const data = response.data?.bookings || response.data || [];
         // Sort newest first
         setBookings(data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)));
@@ -42,12 +48,12 @@ export const MyBookings = () => {
     };
 
     loadBookings();
-  }, [user?._id, storeVersion]);
+  }, [user?._id, user?.id, storeVersion]);
 
   const totals = useMemo(() => ({
     total: bookings.length,
     pending: bookings.filter((b) => b.status === 'pending').length,
-    approved: bookings.filter((b) => b.status === 'accepted' || b.status === 'approved').length,
+    approved: bookings.filter((b) => ['accepted', 'approved', 'confirmed'].includes(b.status)).length,
   }), [bookings]);
 
   const handleCancelBooking = async (id) => {
@@ -65,7 +71,7 @@ export const MyBookings = () => {
 
   const canRateBooking = (booking) => (
     Boolean(booking?._id || booking?.id) &&
-    ['approved', 'confirmed'].includes(booking.status)
+    ['accepted', 'approved', 'confirmed', 'completed'].includes(booking.status)
   );
 
   const handleRateBooking = async (booking, rating) => {
@@ -79,8 +85,10 @@ export const MyBookings = () => {
     setRatingError({ bookingId: '', message: '' });
 
     try {
-      const response = await bookingsAPI.rateBooking({ bookingId, rating });
-      const updatedBooking = response.data;
+      const response = await apiClient.post(`/bookings/${bookingId}/rating`, {
+        rating: Number(rating),
+      });
+      const updatedBooking = response.data?.booking || response.data?.data?.booking || response.data;
 
       setBookings((currentBookings) =>
         currentBookings.map((item) =>

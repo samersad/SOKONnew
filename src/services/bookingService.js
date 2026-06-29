@@ -169,7 +169,7 @@ export const bookingsAPI = {
       const list = res.data?.bookings || [];
       const exists = list.some(b => 
         String(b.apartmentId) === String(apartmentId) && 
-        ['pending', 'approved', 'accepted'].includes(b.status)
+        ['pending', 'approved', 'accepted', 'confirmed'].includes(b.status)
       );
       return { exists };
     }
@@ -224,6 +224,14 @@ export const bookingsAPI = {
     const response = await apiClient.post('/rpc/update_booking_status_with_capacity', {
       p_booking_id: bookingId,
       p_status: status,
+    });
+    emitStoreChange();
+    return { data: mapBooking(response.data?.booking || response.data) };
+  },
+
+  rateBooking: async ({ bookingId, rating }) => {
+    const response = await apiClient.post(`/bookings/${bookingId}/rating`, {
+      rating: Number(rating),
     });
     emitStoreChange();
     return { data: mapBooking(response.data?.booking || response.data) };

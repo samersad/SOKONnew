@@ -4,7 +4,6 @@ import { Navbar } from '../components/Navbar';
 import { apartmentsAPI, bookingsAPI, chatAPI, getApiErrorMessage, reviewsAPI } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useStoreVersion } from '../hooks/useStoreVersion';
-import { getApiErrorMessage, apiClient } from '../services/apiClient';
 import { AVATAR_SM_PLACEHOLDER } from '../utils/placeholders';
 
 export const ApartmentDetails = () => {
@@ -34,6 +33,7 @@ export const ApartmentDetails = () => {
 
   const [reviews, setReviews] = useState([]);
   const [hasActiveBooking, setHasActiveBooking] = useState(false);
+  const [hasApprovedBooking, setHasApprovedBooking] = useState(false);
   const [newReview, setNewReview] = useState({ rating: 5 });
   const [submittingReview, setSubmittingReview] = useState(false);
 
@@ -86,11 +86,27 @@ export const ApartmentDetails = () => {
         try {
           const resReviews = await reviewsAPI.getApartmentReviews(id);
           setReviews(resReviews.data?.reviews || []);
-        } catch (e) {}
+        } catch (e) {
+          console.warn('Reviews are not available yet.', e);
+        }
 
         if (user) {
           const checkRes = await bookingsAPI.checkActiveBooking(user._id, id);
-          setHasActiveBooking(checkRes.exists);
+          setHasActiveBooking(Boolean(checkRes.exists || checkRes.active));
+
+          const bookingsRes = await bookingsAPI.getStudentBookings(user._id);
+          const userBookings = bookingsRes.data?.bookings || [];
+          const approvedBooking = userBookings.some((booking) => {
+            const bookingApartmentId = booking.apartmentId || booking.apartment?._id || booking.apartment?.id;
+            return (
+              String(bookingApartmentId) === String(id) &&
+              ['accepted', 'approved', 'confirmed', 'completed'].includes(booking.status)
+            );
+          });
+          setHasApprovedBooking(approvedBooking);
+        } else {
+          setHasActiveBooking(false);
+          setHasApprovedBooking(false);
         }
       } catch (error) {
         console.error('Error loading page data:', error);
@@ -111,6 +127,8 @@ export const ApartmentDetails = () => {
         comment: '',
       });
       setNewReview({ rating: 5 });
+      const resReviews = await reviewsAPI.getApartmentReviews(id);
+      setReviews(resReviews.data?.reviews || []);
       const response = await apartmentsAPI.getApartment(id);
       setApartment(response.data);
     } catch (err) {
@@ -170,7 +188,7 @@ export const ApartmentDetails = () => {
     setBookingLoading(true);
     try {
       const checkRes = await bookingsAPI.checkActiveBooking(user?._id, id);
-      if (checkRes.exists) {
+      if (checkRes.exists || checkRes.active) {
         setHasActiveBooking(true);
         alert('You already have an active booking for this apartment');
         return;
@@ -233,7 +251,15 @@ export const ApartmentDetails = () => {
   };
 
   const images = apartment?.images || [];
-  const availableSpots = Math.max(Number(apartment?.available_people ?? apartment?.max_people ?? 0) - Number(apartment?.occupiedCount || 0), 0);
+  const capacity = Number(apartment?.max_people ?? apartment?.capacity ?? 0);
+  const availableSpots = Math.max(
+    Math.min(Number(apartment?.available_people ?? capacity) || 0, capacity || Number.MAX_SAFE_INTEGER),
+    0,
+  );
+  const occupiedCount = capacity > 0
+    ? Math.max(capacity - availableSpots, 0)
+    : Number(apartment?.occupiedCount || 0);
+  const occupancyPercent = capacity > 0 ? Math.min((occupiedCount / capacity) * 100, 100) : 0;
   const canShowChatButton = !user || userRole !== 'owner';
 
   const apartmentLat = apartment?.latitude || apartment?.lat;
@@ -350,12 +376,12 @@ export const ApartmentDetails = () => {
                    <h3 className="font-black text-slate-900 mb-4 text-lg">Unit Status</h3>
                    <div className="flex justify-between items-center mb-2">
                      <span className="text-sm text-slate-500 font-bold">Occupancy</span>
-                     <span className="text-sm font-black text-slate-900">{apartment.occupiedCount || 0} / {apartment.max_people}</span>
+                     <span className="text-sm font-black text-slate-900">{occupiedCount} / {capacity}</span>
                    </div>
                    <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                      <div className="h-full bg-primary" style={{ width: `${(apartment.occupiedCount / apartment.max_people) * 100}%` }}></div>
+                      <div className="h-full bg-primary" style={{ width: `${occupancyPercent}%` }}></div>
                    </div>
-                   <p className="mt-4 text-xs text-slate-400 font-medium italic">Available Spots: {apartment.available_people || availableSpots}</p>
+                   <p className="mt-4 text-xs text-slate-400 font-medium italic">Available Spots: {availableSpots}</p>
                 </div>
               </div>
             </div>
@@ -402,6 +428,81 @@ export const ApartmentDetails = () => {
                  )}
               </div>
             )}
+
+            <div className="bg-slate-50 rounded-3xl p-6 border border-slate-100 space-y-6">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-black uppercase text-slate-400 tracking-widest">Rating</p>
+                  <div className="mt-2 flex items-center gap-3">
+                    <span className="text-3xl font-black text-slate-900">
+                      {Number(apartment.rating_average || 0).toFixed(1)}
+                    </span>
+                    <div>
+                      <div className="flex items-center text-amber-400">
+                        {Array.from({ length: 5 }).map((_, i) => (
+                          <i
+                            key={i}
+                            className={`${i < Math.round(apartment.rating_average || 0) ? 'fa-solid' : 'fa-regular'} fa-star mr-1`}
+                          ></i>
+                        ))}
+                      </div>
+                      <p className="mt-1 text-xs font-bold text-slate-400">
+                        {apartment.rating_count || 0} rating{Number(apartment.rating_count || 0) === 1 ? '' : 's'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {hasApprovedBooking && isUserStudent && (
+                  <form onSubmit={handleReviewSubmit} className="flex flex-col gap-3 md:items-end">
+                    <div className="flex items-center gap-2">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <button
+                          key={i}
+                          type="button"
+                          onClick={() => setNewReview((current) => ({ ...current, rating: i + 1 }))}
+                          className="text-2xl text-amber-400 transition hover:scale-110"
+                          aria-label={`Rate ${i + 1} star${i === 0 ? '' : 's'}`}
+                        >
+                          <i className={`${i < newReview.rating ? 'fa-solid' : 'fa-regular'} fa-star`}></i>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={submittingReview}
+                      className="rounded-2xl bg-primary px-5 py-3 text-sm font-black text-white transition hover:opacity-95 disabled:opacity-60"
+                    >
+                      {submittingReview ? 'Saving rating...' : 'Save rating'}
+                    </button>
+                  </form>
+                )}
+              </div>
+
+              {reviews.length > 0 && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {reviews.map((review) => (
+                    <div key={review._id || review.id} className="rounded-2xl bg-white p-4 border border-slate-100">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <img
+                            src={review.userAvatar || AVATAR_SM_PLACEHOLDER}
+                            alt=""
+                            className="h-10 w-10 rounded-full object-cover"
+                          />
+                          <p className="truncate text-sm font-black text-slate-900">{review.userName}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center text-xs text-amber-400">
+                          {Array.from({ length: 5 }).map((_, i) => (
+                            <i key={i} className={`${i < review.rating ? 'fa-solid' : 'fa-regular'} fa-star ml-1`}></i>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
             <div className="flex flex-col gap-4 sm:flex-row">
               {isUserStudent && !hasPhoneNumber ? (
